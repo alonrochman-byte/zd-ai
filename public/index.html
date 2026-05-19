@@ -536,12 +536,7 @@ async function reload(){
         if(groupMap[t.group_id]) t._grp=groupMap[t.group_id];
         if(t.assignee_id && agentMap[t.assignee_id]) t._assignee=agentMap[t.assignee_id];
       });
-      // Keep only tickets assigned to our team
-      const teamTickets=res.filter(t=>{
-        if(!t._assignee) return false;
-        return ALLOWED_AGENTS.some(a=>t._assignee===a);
-      });
-      allTickets=allTickets.concat(teamTickets);fetched+=res.length;
+      allTickets=allTickets.concat(res);fetched+=res.length;
       next=d.next_page?'search.json?'+(d.next_page.split('?')[1]):null;
     }
     buildAgentTabs();
