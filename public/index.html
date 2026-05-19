@@ -352,7 +352,8 @@ const PS=30;
 
 // ── CONFIGURATION ──────────────────────────────────────────
 // Only show tickets assigned to these agents (first-name match, case-insensitive)
-const ALLOWED_AGENTS = ['inon', 'alon', 'guy', 'ינון', 'אלון', 'גיא'];
+// Exact full names as they appear in Zendesk — edit here if names change
+const ALLOWED_AGENTS = ['Alon Rochman', 'Guy Levy', 'Inon Rousso'];
 // Only show tickets from this form name (partial match, case-insensitive)
 const VOTIRO_FORM = 'votiro support form';
 // ───────────────────────────────────────────────────────────
@@ -477,11 +478,14 @@ async function claudeFetch(messages,system){
 }
 
 async function loadStats(){
-  // 1. Load groups (internal mapping only)
+  // 1. Load groups + find Votiro Support group ID
   try{
     const g=await zdFetch('groups.json');
     groupMap={};
     g.groups.forEach(x=>{groupMap[x.id]=x.name;});
+    const vGroup=g.groups.find(x=>x.name.toLowerCase().includes('votiro'));
+    if(vGroup){window._votiroGroupId=vGroup.id;console.log('Votiro group ID:',vGroup.id, vGroup.name);}
+    else{console.warn('Votiro group not found. Groups:',g.groups.map(x=>x.name).join(', '));}
   }catch(e){console.warn('Groups load failed:',e.message);}
 
   // 2. Find Votiro Support Form ID
@@ -532,7 +536,12 @@ async function reload(){
         if(groupMap[t.group_id]) t._grp=groupMap[t.group_id];
         if(t.assignee_id && agentMap[t.assignee_id]) t._assignee=agentMap[t.assignee_id];
       });
-      allTickets=allTickets.concat(res);fetched+=res.length;
+      // Keep only tickets assigned to our team
+      const teamTickets=res.filter(t=>{
+        if(!t._assignee) return false;
+        return ALLOWED_AGENTS.some(a=>t._assignee===a);
+      });
+      allTickets=allTickets.concat(teamTickets);fetched+=res.length;
       next=d.next_page?'search.json?'+(d.next_page.split('?')[1]):null;
     }
     buildAgentTabs();
@@ -553,22 +562,13 @@ function buildAgentTabs(){
     nameCount[name]=(nameCount[name]||0)+1;
   });
 
-  // Find full names that match each allowed agent (by first name, flexible)
-  // Build a map: displayName -> [fullName1, fullName2, ...]
-  const agentGroups={}; // displayLabel -> fullName (for filtering)
+  // Show a tab for every agent that has tickets in this group
+  const agentGroups={};
   Object.keys(nameCount).forEach(fullName=>{
     if(fullName==='__unassigned__') return;
-    const first=fullName.split(' ')[0];
-    const match=ALLOWED_AGENTS.find(a=>
-      first.toLowerCase()===a.toLowerCase() ||
-      fullName.toLowerCase().includes(a.toLowerCase())
-    );
-    if(match){
-      // Normalize to first name as key
-      const label=first;
-      if(!agentGroups[label]) agentGroups[label]={fullName, count:0};
-      agentGroups[label].count+=nameCount[fullName];
-    }
+    const label=fullName.split(' ')[0];
+    if(!agentGroups[label]) agentGroups[label]={fullName, count:0};
+    agentGroups[label].count+=nameCount[fullName];
   });
 
   const tabsEl=document.getElementById('agent-tabs');
