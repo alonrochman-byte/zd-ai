@@ -303,9 +303,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);height:100vh
             <option value="solved">Solved</option>
             <option value="closed">Closed</option>
           </select>
-          <select id="f-group" onchange="applyFilters()">
-            <option value="">All groups</option>
-          </select>
+          <span style="font-size:11px;font-weight:600;color:var(--teal);background:rgba(0,141,166,0.1);border:1.5px solid rgba(0,141,166,0.25);padding:5px 10px;border-radius:var(--r);white-space:nowrap;">📋 Votiro Support</span>
           <button class="refresh-btn" onclick="reload()" title="Refresh">↻</button>
         </div>
         <input type="text" id="f-search" placeholder="Search subject..." oninput="applyFilters()"/>
@@ -351,6 +349,13 @@ let allTickets=[], filtered=[], groupMap={}, agentMap={};
 let pg=0, busy=false, activeTicket=null, chatHistory=[];
 let activeAgentFilter='';
 const PS=30;
+
+// ── CONFIGURATION ──────────────────────────────────────────
+// Only show tickets assigned to these agents (first-name match, case-insensitive)
+const ALLOWED_AGENTS = ['ינון', 'אלון', 'גיא', 'yinon', 'alon', 'guy'];
+// Only show tickets from this form name (partial match, case-insensitive)
+const VOTIRO_FORM = 'votiro support form';
+// ───────────────────────────────────────────────────────────
 
 function showScreen(id){
   document.querySelectorAll('.screen').forEach(s=>{s.classList.remove('active');s.style.display='';});
@@ -472,37 +477,39 @@ async function claudeFetch(messages,system){
 }
 
 async function loadStats(){
-  // 1. Load groups dynamically from Zendesk API
+  // 1. Load groups (internal mapping only)
   try{
     const g=await zdFetch('groups.json');
     groupMap={};
     g.groups.forEach(x=>{groupMap[x.id]=x.name;});
-    const sel=document.getElementById('f-group');
-    sel.innerHTML='<option value="">All groups</option>';
-    g.groups.sort((a,b)=>a.name.localeCompare(b.name)).forEach(x=>{
-      const opt=document.createElement('option');
-      opt.value=x.name; opt.textContent=x.name;
-      sel.appendChild(opt);
-    });
   }catch(e){console.warn('Groups load failed:',e.message);}
 
-  // 2. Load agents
+  // 2. Find Votiro Support Form ID
+  try{
+    const f=await zdFetch('ticket_forms.json');
+    const form=(f.ticket_forms||[]).find(x=>x.name.toLowerCase().includes(VOTIRO_FORM));
+    if(form){window._votiroFormId=form.id;console.log('Votiro form ID:',form.id);}
+    else{console.warn('Votiro form not found. Available:',(f.ticket_forms||[]).map(x=>x.name).join(', '));}
+  }catch(e){console.warn('Forms load failed:',e.message);}
+
+  // 3. Load agents
   try{
     const a=await zdFetch('users.json?role=agent&per_page=100');
     agentMap={};
     (a.users||[]).forEach(u=>{agentMap[u.id]=u.name;});
   }catch(e){console.warn('Agents load failed:',e.message);}
 
-  // 3. Stats
+  // 4. Stats scoped to Votiro form
+  const formQ=window._votiroFormId?'+ticket_form_id:'+window._votiroFormId:'';
   for(const st of['open','pending']){
     try{
-      const d=await zdFetch('search.json?query=type:ticket+status:'+st+'&per_page=1');
+      const d=await zdFetch('search.json?query=type:ticket+status:'+st+formQ+'&per_page=1');
       const el=document.getElementById('s-'+st);
       if(el){el.textContent=d.count||0;el.classList.remove('muted');}
     }catch(e){}
   }
   try{
-    const d=await zdFetch('search.json?query=type:ticket+status<closed&per_page=1');
+    const d=await zdFetch('search.json?query=type:ticket+status<closed'+formQ+'&per_page=1');
     const el=document.getElementById('s-total');
     if(el){el.textContent=d.count||0;el.classList.remove('muted');}
   }catch(e){}
@@ -513,7 +520,9 @@ async function reload(){
   document.getElementById('tlist').style.display='none';
   document.getElementById('state-empty').style.display='none';
   allTickets=[];
-  let next='search.json?query=type:ticket+status<closed&per_page=100&sort_by=updated_at&sort_order=desc';
+  // Scope query to Votiro Support Form if we have its ID
+  const formQ=window._votiroFormId?'+ticket_form_id:'+window._votiroFormId:'';
+  let next='search.json?query=type:ticket+status<closed'+formQ+'&per_page=100&sort_by=updated_at&sort_order=desc';
   let fetched=0;
   try{
     while(next&&fetched<600){
@@ -523,7 +532,13 @@ async function reload(){
         if(groupMap[t.group_id]) t._grp=groupMap[t.group_id];
         if(t.assignee_id && agentMap[t.assignee_id]) t._assignee=agentMap[t.assignee_id];
       });
-      allTickets=allTickets.concat(res);fetched+=res.length;
+      // Keep only tickets assigned to allowed agents (or unassigned)
+      const allowed=res.filter(t=>{
+        if(!t._assignee) return true; // unassigned — keep
+        const first=t._assignee.split(' ')[0].toLowerCase();
+        return ALLOWED_AGENTS.some(a=>first.includes(a.toLowerCase())||a.toLowerCase().includes(first));
+      });
+      allTickets=allTickets.concat(allowed);fetched+=res.length;
       next=d.next_page?'search.json?'+(d.next_page.split('?')[1]):null;
     }
     buildAgentTabs();
@@ -542,8 +557,13 @@ function buildAgentTabs(){
     const name=t._assignee||'Unassigned';
     counts[name]=(counts[name]||0)+1;
   });
+  // Only show tabs for allowed agents + Unassigned
   const agents=Object.entries(counts)
-    .filter(([n])=>n!=='Unassigned')
+    .filter(([n])=>{
+      if(n==='Unassigned') return false;
+      const first=n.split(' ')[0].toLowerCase();
+      return ALLOWED_AGENTS.some(a=>first.includes(a.toLowerCase())||a.toLowerCase().includes(first));
+    })
     .sort((a,b)=>b[1]-a[1]);
   if(counts['Unassigned']) agents.push(['Unassigned',counts['Unassigned']]);
 
@@ -554,10 +574,9 @@ function buildAgentTabs(){
     tab.className='atab';
     tab.dataset.agent=name;
     tab.onclick=function(){selectAgentTab(this);};
-    // Show first name only to save space
     const shortName=name.split(' ')[0];
     tab.innerHTML=`${h(shortName)} <span class="atab-count">${count}</span>`;
-    tab.title=name; // full name on hover
+    tab.title=name;
     tabsEl.appendChild(tab);
   });
 }
@@ -571,11 +590,9 @@ function selectAgentTab(el){
 
 function applyFilters(){
   const st=document.getElementById('f-status').value;
-  const gr=document.getElementById('f-group').value;
   const sr=document.getElementById('f-search').value.toLowerCase();
   filtered=allTickets.filter(t=>{
     if(st && t.status!==st) return false;
-    if(gr && t._grp!==gr) return false;
     if(sr && !(t.subject||'').toLowerCase().includes(sr)) return false;
     if(activeAgentFilter){
       if(activeAgentFilter==='Unassigned'){if(t._assignee) return false;}
