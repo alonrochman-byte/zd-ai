@@ -503,17 +503,16 @@ async function loadStats(){
     (a.users||[]).forEach(u=>{agentMap[u.id]=u.name;});
   }catch(e){console.warn('Agents load failed:',e.message);}
 
-  // 4. Stats scoped to Votiro form
-  const formQ=window._votiroFormId?'+ticket_form_id:'+window._votiroFormId:'';
+  // 4. Stats
   for(const st of['open','pending']){
     try{
-      const d=await zdFetch('search.json?query=type:ticket+status:'+st+formQ+'&per_page=1');
+      const d=await zdFetch('search.json?query=type:ticket+status:'+st+'&per_page=1');
       const el=document.getElementById('s-'+st);
       if(el){el.textContent=d.count||0;el.classList.remove('muted');}
     }catch(e){}
   }
   try{
-    const d=await zdFetch('search.json?query=type:ticket+status<closed'+formQ+'&per_page=1');
+    const d=await zdFetch('search.json?query=type:ticket+status<closed&per_page=1');
     const el=document.getElementById('s-total');
     if(el){el.textContent=d.count||0;el.classList.remove('muted');}
   }catch(e){}
@@ -525,8 +524,7 @@ async function reload(){
   document.getElementById('state-empty').style.display='none';
   allTickets=[];
   // Scope query to Votiro Support Form if we have its ID
-  const formQ=window._votiroFormId?'+ticket_form_id:'+window._votiroFormId:'';
-  let next='search.json?query=type:ticket+status<closed'+formQ+'&per_page=100&sort_by=updated_at&sort_order=desc';
+  let next='search.json?query=type:ticket+status<closed&per_page=100&sort_by=updated_at&sort_order=desc';
   let fetched=0;
   try{
     while(next&&fetched<600){
@@ -557,10 +555,11 @@ function buildAgentTabs(){
     nameCount[name]=(nameCount[name]||0)+1;
   });
 
-  // Show a tab for every agent that has tickets in this group
+  // Show tabs for ALLOWED_AGENTS only
   const agentGroups={};
   Object.keys(nameCount).forEach(fullName=>{
     if(fullName==='__unassigned__') return;
+    if(!ALLOWED_AGENTS.includes(fullName)) return;
     const label=fullName.split(' ')[0];
     if(!agentGroups[label]) agentGroups[label]={fullName, count:0};
     agentGroups[label].count+=nameCount[fullName];
